@@ -19,7 +19,7 @@ class Warehouse(Base):
     # Максимальная вместимость - целое число
     capacity: Mapped[int]
 
-    # Связь с таблицей товаров
+    # Связь с таблицей товаров, в случае удаления склада, все сопутствующее тоже удаляется
     items: Mapped[list["Item"]] = relationship(back_populates="warehouse", cascade="all, delete-orphan")
 
 # Таблица Товаров
