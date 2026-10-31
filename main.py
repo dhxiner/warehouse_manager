@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
-from models import Warehouse
-from schemas import WarehouseCreate
+from models import Warehouse, Item
+from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse
 
 app = FastAPI(
     title="Warehouse Manager",
@@ -44,3 +44,42 @@ async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depend
     await db.refresh(new_warehouse)
     
     return {"message": "Склад успешно создан!", "warehouse": new_warehouse}
+
+@app.post("/items")
+async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
+    # Ищем склад в базе данных по ID, который указан в товаре
+    warehouse_query = select(Warehouse).where(Warehouse.id == item.warehouse_id)
+    warehouse_result = await db.execute(warehouse_query)
+    
+    # scalar_one_or_none() вернет объект склада или None, если склад не найден
+    warehouse = warehouse_result.scalar_one_or_none()
+
+    # Если такого склада нет, прерываем работу и возвращаем ошибку 404
+    if warehouse is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Склад с ID {item.warehouse_id} не существует!"
+        )
+
+    new_item = Item(
+        title = item.title,
+        quantity = item.quantity,
+        price = item.price,
+        warehouse_id = item.warehouse_id
+    )
+
+    db.add(new_item)
+
+    await db.commit()
+
+    await db.refresh(new_item)
+
+    return {"message": "Товар успешно добавлен!", "item": new_item}
+
+
+@app.get("/items")
+async def get_items(db: AsyncSession = Depends(get_db)):
+    query = select(Item)
+    result = await db.execute(query)
+    items =  result.scalars().all()
+    return {"items": items}
