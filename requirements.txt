@@ -4,3 +4,5 @@ sqlalchemy>=2.0.0
 asyncpg
 pydantic>=2.0.0
 python-dotenv
+alembic
+greenlet
