@@ -2,14 +2,14 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
-from models import Warehouse, Item, StockLog
-from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse, ItemUpdateQuantity
+from models import Warehouse, Item, StockLog, User
+from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse, ItemUpdateQuantity, UserCreate, UserResponse
+from security import get_password_hash, verify_password, create_access_token
 
 app = FastAPI(
     title="Warehouse Manager",
     description="Отслеживание товаров на складах"
 )
-
 
 @app.get("/warehouses")
 async def get_warehouses(db: AsyncSession = Depends(get_db)):
@@ -24,7 +24,6 @@ async def get_warehouses(db: AsyncSession = Depends(get_db)):
 
     # Возврат список пользователю
     return {"warehouses": warehouses}
-
 
 @app.post("/warehouses")
 async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depends(get_db)):
@@ -46,7 +45,6 @@ async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depend
     await db.refresh(new_warehouse)
     
     return {"message": "Склад успешно создан!", "warehouse": new_warehouse}
-
 
 @app.post("/items")
 async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
@@ -90,7 +88,6 @@ async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
 
     return {"message": "Товар успешно добавлен!", "item": new_item}
 
-
 @app.get("/items")
 async def get_items(
     warehouse_id: int | None = None,
@@ -112,7 +109,6 @@ async def get_items(
     result = await db.execute(query)
     items =  result.scalars().all()
     return {"items": items}
-
 
 @app.patch("/items/{item_id}/quantity")
 async def update_item_quantity(
@@ -183,7 +179,6 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"message": f"Товар с ID {item_id} успешно удален из базы данных!"}
 
-
 @app.get("/logs")
 async def get_logs(
     limit: int = 20,
@@ -197,3 +192,42 @@ async def get_logs(
     logs = result.scalars().all()
 
     return {"logs": logs}
+
+@app.post("/auth/register", response_model=UserResponse)
+async def register_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):
+    query = select(User).where(User.username == payload.username)
+    result = await db.execute(query)
+    existing_user = result.scalar_one_or_none()
+
+    if existing_user is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Пользователь с таким именем уже существует!"
+        )
+    hashed_pwd = get_password_hash(payload.password)
+
+    new_user = User(
+        username = payload.username,
+        hashed_password = hashed_pwd
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
+
+@app.post("/auth/login")
+async def login_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):
+    query = select(User).where(User.username == payload.username)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+
+    if user is None or not verify_password(payload.password, user.hashed_password):
+            raise HTTPException(
+                status_code= status.HTTP_401_UNAUTHORIZED,
+                detail="Неверное имя пользователя или пароль!",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+
+    access_token = create_access_token(data={"sub": user.username})
+
+    return {"access_token": access_token, "token_type": "bearer"}
