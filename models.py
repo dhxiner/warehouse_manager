@@ -1,4 +1,5 @@
-from sqlalchemy import String, ForeignKey
+from datetime import datetime
+from sqlalchemy import String, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
@@ -42,3 +43,19 @@ class Item(Base):
     # Связь с таблицей Складов
     warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"))
     warehouse: Mapped["Warehouse"] = relationship(back_populates="items")
+
+# Таблица историй операций
+class StockLog(Base):
+    __tablename__ = "stock_logs"
+
+    id: Mapped[int] = mapped_column(primary_key= True)
+
+    item_title: Mapped[str] = mapped_column(String(100))
+
+    warehouse_id: Mapped[int]
+
+    operation_type: Mapped[str] = mapped_column(String(50))
+
+    quantity_changed: Mapped[int]
+
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
