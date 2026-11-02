@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models import Warehouse, Item, StockLog, User
-from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse, ItemUpdateQuantity, UserCreate, UserResponse
+from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse, ItemUpdateQuantity, UserCreate, UserResponse, UserUpdateRole
 from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 
 app = FastAPI(
@@ -312,3 +312,29 @@ async def delete_warehouse(
     
     return {"message": f"Склад с ID {warehouse_id} и все его товары успешно удалены"}
 
+@app.patch("/admin/users/{user_id}/role", response_model=UserResponse)
+async def update_user_role(
+    user_id: int,
+    payload: UserUpdateRole,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RoleChecker(["admin"])) # Доступ строго админам
+):
+    # Ищем целевого пользователя в базе данных
+    query = select(User).where(User.id == user_id)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+
+    # Если пользователь не найден, возвращаем 404
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Пользователь с ID {user_id} не найден!"
+        )
+
+    # Обновляем роль пользователя в модели
+    user.role = payload.role
+    
+    # Физически сохраняем изменения в PostgreSQL
+    await db.commit()
+    await db.refresh(user)
+    return user

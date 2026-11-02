@@ -1,5 +1,5 @@
 from pydantic import BaseModel, PositiveInt, PositiveFloat
-
+from typing import Literal
 
 # Создание Склада
 class WarehouseCreate(BaseModel):
@@ -55,3 +55,7 @@ class UserResponse(BaseModel):
 
     class Config:
             from_attributes = True
+
+
+class UserUpdateRole(BaseModel):
+    role: Literal["admin", "manager", "viewer"]
