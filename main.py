@@ -1,15 +1,58 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+import jwt
+from fastapi import FastAPI, Depends, HTTPException, status, Security
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models import Warehouse, Item, StockLog, User
 from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse, ItemUpdateQuantity, UserCreate, UserResponse
-from security import get_password_hash, verify_password, create_access_token
+from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 
 app = FastAPI(
     title="Warehouse Manager",
-    description="Отслеживание товаров на складах"
+    description="Отслеживание и изменение товаров на складах"
 )
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Не удалось валидировать учетные данные",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        # Расшифровываем токен с помощью SECRET_KEY
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+        
+    # Ищем пользователя в базе данных по имени из токена
+    query = select(User).where(User.username == username)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    
+    if user is None:
+        raise credentials_exception
+        
+    # Возвращаем полноценный объект пользователя с его ролью внутри
+    return user
+
+class RoleChecker:
+    def __init__(self, allowed_roles: list[str]):
+        self.allowed_roles = allowed_roles
+
+    def __call__(self, current_user: User = Depends(get_current_user)):
+        # Если роль пользователя не входит в список разрешенных, блокируем доступ
+        if current_user.role not in self.allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="У вас недостаточно прав для выполнения этой операции!"
+            )
+        return current_user
 
 @app.get("/warehouses")
 async def get_warehouses(db: AsyncSession = Depends(get_db)):
@@ -26,7 +69,11 @@ async def get_warehouses(db: AsyncSession = Depends(get_db)):
     return {"warehouses": warehouses}
 
 @app.post("/warehouses")
-async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depends(get_db)):
+async def create_warehouse(
+    warehouse: WarehouseCreate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RoleChecker(["admin"]))
+):
 
     # Перевод данных из схемы Pydantic в модель SQLAlchemy
     new_warehouse = Warehouse(
@@ -47,7 +94,11 @@ async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depend
     return {"message": "Склад успешно создан!", "warehouse": new_warehouse}
 
 @app.post("/items")
-async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
+async def create_item(
+    item: ItemCreate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RoleChecker(["admin", "manager"]))
+):
     # Ищем склад в базе данных по ID, который указан в товаре
     warehouse_query = select(Warehouse).where(Warehouse.id == item.warehouse_id)
     warehouse_result = await db.execute(warehouse_query)
@@ -114,7 +165,8 @@ async def get_items(
 async def update_item_quantity(
     item_id: int,
     payload: ItemUpdateQuantity,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RoleChecker(["admin", "manager"]))
 ):
     item_query = select(Item).where(item_id == Item.id)
     item_result = await db.execute(item_query)
@@ -164,7 +216,11 @@ async def update_item_quantity(
     return {"message": f"Количество товара успешно обновлено! Новые остатки: {item.quantity} шт.", "item": item}
 
 @app.delete("/item/{item_id}")
-async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_item(
+    item_id: int, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RoleChecker(["admin"]))
+):
     query = select(item).where(Item.id == item.id)
     result = await db.execute(query)
     item = result.scalar_one_or_none()
@@ -231,3 +287,28 @@ async def login_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     access_token = create_access_token(data={"sub": user.username})
 
     return {"access_token": access_token, "token_type": "bearer"}
+
+@app.delete("/warehouses/{warehouse_id}")
+async def delete_warehouse(
+    warehouse_id: int, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RoleChecker(["admin"])) # Жесткий контроль роли
+):
+    # Ищем склад в базе данных
+    query = select(Warehouse).where(Warehouse.id == warehouse_id)
+    result = await db.execute(query)
+    warehouse = result.scalar_one_or_none()
+    
+    # Если склад не найден, возвращаем 404
+    if warehouse is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Склад с ID {warehouse_id} для удаления не найден!"
+        )
+        
+    # Удаляем склад (SQLAlchemy сама каскадно удалит все связанные товары)
+    await db.delete(warehouse)
+    await db.commit()
+    
+    return {"message": f"Склад с ID {warehouse_id} и все его товары успешно удалены"}
+

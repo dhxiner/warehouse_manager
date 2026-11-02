@@ -69,3 +69,5 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(15), unique = True)
 
     hashed_password: Mapped[str] = mapped_column(String(100))
+
+    role: Mapped[str] = mapped_column(String(20), default="viewer")
