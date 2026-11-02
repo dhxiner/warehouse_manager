@@ -119,3 +119,19 @@ async def update_item_quantity(
     item.quantity = payload.quantity
     await db.commit()
     return {"message": f"Количество товара успешно обновлено! Новые остатки: {item.quantity} шт.", "item": item}
+
+@app.delete("/item/{item_id}")
+async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
+    query = select(item).where(Item.id == item.id)
+    result = await db.execute(query)
+    item = result.scalar_one_or_none()
+
+    if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Товар с ID {item_id} для удаления не найден!"
+        )
+
+    await db.delete(item)
+    await db.commit()
+    return {"message": f"Товар с ID {item_id} успешно удален из базы данных!"}
