@@ -33,3 +33,6 @@ class ItemResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ItemUpdateQuantity(BaseModel):
+    quantity: PositiveInt
