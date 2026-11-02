@@ -10,6 +10,7 @@ app = FastAPI(
     description="Отслеживание товаров на складах"
 )
 
+
 @app.get("/warehouses")
 async def get_warehouses(db: AsyncSession = Depends(get_db)):
     # SQL запрос для выбора всех складов
@@ -23,6 +24,7 @@ async def get_warehouses(db: AsyncSession = Depends(get_db)):
 
     # Возврат список пользователю
     return {"warehouses": warehouses}
+
 
 @app.post("/warehouses")
 async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depends(get_db)):
@@ -44,6 +46,7 @@ async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depend
     await db.refresh(new_warehouse)
     
     return {"message": "Склад успешно создан!", "warehouse": new_warehouse}
+
 
 @app.post("/items")
 async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
@@ -78,11 +81,27 @@ async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/items")
-async def get_items(db: AsyncSession = Depends(get_db)):
+async def get_items(
+    warehouse_id: int | None = None,
+    search: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db)
+):
     query = select(Item)
+    
+    if warehouse_id is not None:
+        query = query.where(Item.warehouse_id == warehouse_id)
+    
+    if search is not None:
+        query = query.where(Item.title.ilike(f"%{search}%"))
+    
+    query = query.limit(limit).offset(offset)
+    
     result = await db.execute(query)
     items =  result.scalars().all()
     return {"items": items}
+
 
 @app.patch("/items/{item_id}/quantity")
 async def update_item_quantity(
@@ -93,6 +112,7 @@ async def update_item_quantity(
     item_query = select(Item).where(item_id == Item.id)
     item_result = await db.execute(item_query)
     item = item_result.scalar_one_or_none()
+    
     if item is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -107,6 +127,7 @@ async def update_item_quantity(
     total_quantity_result = await db.execute(total_quantity_query)
     current_stock = total_quantity_result.scalar() or 0
     future_stock = current_stock - item.quantity + payload.quantity
+    
     if future_stock > warehouse.capacity:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -116,7 +137,9 @@ async def update_item_quantity(
                 f"Требуется места после обновления: {future_stock} шт."
             )
         )
+    
     item.quantity = payload.quantity
+    
     await db.commit()
     return {"message": f"Количество товара успешно обновлено! Новые остатки: {item.quantity} шт.", "item": item}
 
