@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
-from models import Warehouse, Item
+from models import Warehouse, Item, StockLog
 from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse, ItemUpdateQuantity
 
 app = FastAPI(
@@ -77,6 +77,17 @@ async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
 
     await db.refresh(new_item)
 
+    log_entry = StockLog(
+        item_title = new_item.title,
+        warehouse_id = new_item.warehouse_id,
+        operation_type = "CREATE",
+        quantity_changed = new_item.quantity
+    )
+
+    db.add(log_entry)
+
+    await db.commit()
+
     return {"message": "Товар успешно добавлен!", "item": new_item}
 
 
@@ -137,8 +148,21 @@ async def update_item_quantity(
                 f"Требуется места после обновления: {future_stock} шт."
             )
         )
-    
+
+    change = payload.quantity - item.quantity
+
     item.quantity = payload.quantity
+    
+    await db.commit()
+
+    log_entry = StockLog(
+        item_title=item.title,
+        warehouse_id=item.warehouse_id,
+        operation_type="UPDATE",
+        quantity_changed=change
+    )
+    
+    db.add(log_entry)
     
     await db.commit()
     return {"message": f"Количество товара успешно обновлено! Новые остатки: {item.quantity} шт.", "item": item}
@@ -158,3 +182,18 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(item)
     await db.commit()
     return {"message": f"Товар с ID {item_id} успешно удален из базы данных!"}
+
+
+@app.get("/logs")
+async def get_logs(
+    limit: int = 20,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db)
+):
+    query = select(StockLog).limit(limit).offset(offset)
+
+    result = await db.execute(query)
+
+    logs = result.scalars().all()
+
+    return {"logs": logs}
