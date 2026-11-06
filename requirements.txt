@@ -8,3 +8,4 @@ alembic
 greenlet
 passlib[bcrypt]
 pyjwt
+openpyxl

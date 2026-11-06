@@ -1,5 +1,5 @@
-import jwt
-from fastapi import FastAPI, Depends, HTTPException, status, Security
+import jwt, io
+from fastapi import FastAPI, Depends, HTTPException, status, Security, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +7,7 @@ from database import get_db
 from models import Warehouse, Item, StockLog, User
 from schemas import WarehouseCreate, WarehouseResponse, ItemCreate, ItemResponse, ItemUpdateQuantity, UserCreate, UserResponse, UserUpdateRole
 from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
+from openpyxl import Workbook
 
 app = FastAPI(
     title="Warehouse Manager",
@@ -338,3 +339,58 @@ async def update_user_role(
     await db.commit()
     await db.refresh(user)
     return user
+
+# ЭКСПОРТ ОСТАТКОВ СКЛАДА В EXCEL (Доступно для Admin и Manager)
+@app.get("/warehouses/{warehouse_id}/export")
+async def export_warehouse_to_excel(
+    warehouse_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RoleChecker(["admin", "manager"])) # Защита ролей
+):
+    # Проверяем, существует ли склад
+    warehouse_query = select(Warehouse).where(Warehouse.id == warehouse_id)
+    warehouse_result = await db.execute(warehouse_query)
+    warehouse = warehouse_result.scalar_one_or_none()
+    
+    if warehouse is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Склад с ID {warehouse_id} не найден!"
+        )
+        
+    # Забираем все товары, привязанные к этому складу
+    items_query = select(Item).where(Item.warehouse_id == warehouse_id)
+    items_result = await db.execute(items_query)
+    items = items_result.scalars().all()
+    
+    # Создаем Excel-файл в памяти
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"Склад ID {warehouse_id}"
+    
+    # Записываем шапку таблицы
+    headers = ["ID Товара", "Название", "Количество (шт.)", "Цена за шт. (руб.)", "Общая стоимость (руб.)"]
+    ws.append(headers)
+    
+    # Заполняем таблицу данными товаров
+    for item in items:
+        # Рассчитываем общую стоимость позиции
+        total_price = item.quantity * item.price
+        
+        row = [item.id, item.title, item.quantity, item.price, total_price]
+        ws.append(row)
+        
+    # Сохраняем книгу Excel в поток байтов оперативной памяти
+    file_stream = io.BytesIO()
+    wb.save(file_stream)
+    file_stream.seek(0) # Перематываем указатель на начало файла для чтения
+    
+    # Название скачиваемого файла 
+    filename = f"report_warehouse_{warehouse_id}.xlsx"
+    
+    # Отправляем поток байтов в браузер в виде скачиваемого файла
+    return StreamingResponse(
+        file_stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
